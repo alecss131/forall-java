@@ -1,19 +1,15 @@
 package ru.example;
 
 import com.lowagie.text.DocumentException;
-import jakarta.persistence.*;
 import lombok.*;
-import org.hibernate.Session;
-import org.hibernate.SessionFactory;
-import org.hibernate.Transaction;
-import org.hibernate.cfg.Configuration;
-import org.hibernate.cfg.Environment;
 import org.thymeleaf.TemplateEngine;
 import org.thymeleaf.context.Context;
 import org.thymeleaf.templatemode.TemplateMode;
 import org.thymeleaf.templateresolver.FileTemplateResolver;
 import org.xhtmlrenderer.pdf.ITextRenderer;
 import java.io.*;
+import java.sql.*;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
 
@@ -27,31 +23,45 @@ public class Main {
         TemplateEngine templateEngine = new TemplateEngine();
         templateEngine.setTemplateResolver(resolver);
         Context context = new Context();
+        List<Data> data = new ArrayList<>();
 
-        Configuration configuration = new Configuration().addAnnotatedClass(Data.class)
-                .setProperty(Environment.DRIVER, "org.postgresql.Driver")
-                .setProperty(Environment.URL, "jdbc:postgresql://127.0.0.1:5432/testdb")
-                .setProperty(Environment.USER, "user")
-                .setProperty(Environment.PASS, "user")
-                .setProperty(Environment.DIALECT, "org.hibernate.dialect.PostgreSQLDialect")
-                .setProperty(Environment.SHOW_SQL, "true")
-                .setProperty(Environment.HBM2DDL_AUTO, "update");
-        try (SessionFactory factory = configuration.buildSessionFactory();
-             Session session = factory.openSession()) {
-            List<Data> data = session.createQuery("select a from Data a", Data.class).getResultList();
-            if (data.size() == 0) {
-                Transaction tx = session.beginTransaction();
-                Random rnd = new Random();
-                session.persist(new Data("data", rnd.nextInt(), rnd.nextFloat()));
-                session.persist(new Data("another data", rnd.nextInt(), rnd.nextFloat()));
-                session.persist(new Data("test", rnd.nextInt(), rnd.nextFloat()));
-                session.persist(new Data("some data", rnd.nextInt(), rnd.nextFloat()));
-                session.persist(new Data("string", rnd.nextInt(), rnd.nextFloat()));
-                tx.commit();
-                data = session.createQuery("select a from Data a", Data.class).getResultList();
+        try {
+            Connection connection = DriverManager.getConnection("jdbc:sqlite:data.db");
+            String sql = "create table if not exists data(id integer primary key not null, a text, b integer, c real)";
+            try (Statement statement = connection.createStatement()) {
+                statement.execute(sql);
+                sql = "select * from data";
+                ResultSet result = statement.executeQuery(sql);
+                while (result.next()) {
+                    data.add(new Data(result.getString("a"), result.getInt("b"), result.getFloat("c")));
+                }
             }
-            context.setVariable("data", data);
+            if (data.isEmpty()) {
+                sql = "insert into data('a', 'b', 'c') values(?, ?, ?)";
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    Random rnd = new Random();
+                    String[] names = {"data", "another data", "test", "some data", "string"};
+                    for (String name : names) {
+                        statement.setObject(1, name);
+                        statement.setObject(2, rnd.nextInt());
+                        statement.setObject(3, rnd.nextFloat());
+                        statement.execute();
+                    }
+                }
+                try (Statement statement = connection.createStatement()) {
+                    sql = "select * from data";
+                    ResultSet result = statement.executeQuery(sql);
+                    while (result.next()) {
+                        data.add(new Data(result.getString("a"), result.getInt("b"), result.getFloat("c")));
+                    }
+                }
+            }
+            connection.close();
+        } catch (SQLException e) {
+            System.out.println(e.getMessage());
         }
+
+        context.setVariable("data", data);
 
         String html = templateEngine.process("index", context);
         ITextRenderer renderer = new ITextRenderer();
@@ -66,22 +76,10 @@ public class Main {
     }
 }
 
-@NoArgsConstructor
-@Entity
-@Setter
+@AllArgsConstructor
 @Getter
-@Table(name = "data")
 class Data {
-    @Id
-    @Column(name = "id", nullable = false)
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
     private String a;
     private int b;
     private float c;
-    public Data(String a, int b, float c) {
-        this.a = a;
-        this.b = b;
-        this.c = c;
-    }
 }
